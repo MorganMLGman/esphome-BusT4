@@ -1,9 +1,11 @@
 #pragma once
 
+#include <atomic>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <functional>
 #include <vector>
+#include "esphome/components/sensor/sensor.h"
 #include "esphome/components/uart/uart.h"
 #include "t4_packet.h"
 
@@ -49,6 +51,8 @@ class BusT4Component final : public Component, public uart::UARTDevice {
 
   T4Source get_address() const { return address_; }
 
+  void set_bus_errors_sensor(sensor::Sensor *sensor) { bus_errors_sensor_ = sensor; }
+
   // Register a device to receive packet callbacks
   void register_device(BusT4Device *device) { devices_.push_back(device); }
 
@@ -80,6 +84,12 @@ class BusT4Component final : public Component, public uart::UARTDevice {
   QueueHandle_t txQueue_ = nullptr;
 
   std::vector<BusT4Device *> devices_;
+
+  // Bad frames since boot: checksum, length, stalled mid-frame or no room in the RX queue.
+  // Counted in the bus task, published from loop().
+  std::atomic<uint32_t> rx_errors_{0};
+  uint32_t published_errors_{0};
+  sensor::Sensor *bus_errors_sensor_{nullptr};
 
   T4Source controller_{0x00, 0x00};
   bool controller_ready_{false};

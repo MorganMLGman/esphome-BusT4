@@ -81,6 +81,12 @@ void BusT4Component::loop() {
       device->on_packet(packet);
     }
   }
+
+  const uint32_t errors = rx_errors_;
+  if (bus_errors_sensor_ != nullptr && (!bus_errors_sensor_->has_state() || errors != published_errors_)) {
+    published_errors_ = errors;
+    bus_errors_sensor_->publish_state(errors);
+  }
 }
 
 void BusT4Component::dump_config() {
@@ -139,6 +145,7 @@ void BusT4Component::busTask() {
               ESP_LOGW(TAG, "Header checksum mismatch: expected 0x%02X, got 0x%02X: %s",
                        header_check, packet.data[6],
                        format_hex_pretty(packet.data, packet.size).c_str());
+              rx_errors_++;
               rx_state = WAIT_SYNC;
               break;
             }
@@ -153,6 +160,7 @@ void BusT4Component::busTask() {
                 ESP_LOGW(TAG, "Payload checksum mismatch: expected 0x%02X, got 0x%02X: %s",
                          payload_check, packet.data[packet.size - 1],
                          format_hex_pretty(packet.data, packet.size).c_str());
+                rx_errors_++;
                 rx_state = WAIT_SYNC;
                 break;
               }
@@ -163,9 +171,11 @@ void BusT4Component::busTask() {
                      format_hex_pretty(packet.data, packet.size).c_str(), packet.size);
             if (!xQueueSend(rxQueue_, &packet, pdMS_TO_TICKS(100))) {
               ESP_LOGW(TAG, "RX queue full, dropping packet");
+              rx_errors_++;
             }
           } else {
             ESP_LOGW(TAG, "Trailing size mismatch: expected 0x%02X, got 0x%02X", expected_size, byte);
+            rx_errors_++;
           }
           rx_state = WAIT_SYNC;
           break;
@@ -177,6 +187,7 @@ void BusT4Component::busTask() {
     if (rx_state != WAIT_SYNC && millis() - last_rx_ms >= FRAME_STALL_MS) {
       ESP_LOGW(TAG, "Frame stalled after %u of %u bytes, resyncing",
                static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size));
+      rx_errors_++;
       rx_state = WAIT_SYNC;
     }
 

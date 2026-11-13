@@ -202,6 +202,7 @@ button:
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `address` | hex | `0x5090` | Device address on the bus |
+| `bus_errors` | sensor | - | Diagnostic count of bad frames since boot (checksum, length, cut off mid-frame, RX queue full). A steady rise points at wiring or interference. |
 
 #### Cover Platform
 
