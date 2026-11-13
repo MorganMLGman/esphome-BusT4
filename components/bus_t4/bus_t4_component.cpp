@@ -212,7 +212,12 @@ void BusT4Component::busTask() {
 bool BusT4Component::queue_frame(const T4Frame &frame, TickType_t xTicksToWait) {
   if (txQueue_ == nullptr)
     return false;
-  return xQueueSend(txQueue_, &frame, xTicksToWait);
+  // Callers fire and forget, so this is the only trace a dropped command leaves
+  if (!xQueueSend(txQueue_, &frame, xTicksToWait)) {
+    ESP_LOGW(TAG, "TX queue full, dropping frame");
+    return false;
+  }
+  return true;
 }
 
 bool BusT4Component::write(T4Packet *packet, TickType_t xTicksToWait) {
