@@ -329,6 +329,21 @@ number:
       - lambda: 'id(gate).send_config_set(0x88, (uint8_t)x);'
 ```
 
+### Bus Connection State
+
+`last_rx_ms()` returns the `millis()` timestamp of the last packet received from the control unit (0 before the first one). The component polls the controller's status every 15 s, so a few missed replies mean the link is down:
+
+```yaml
+binary_sensor:
+  - platform: template
+    name: "Bus Connected"
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: |-
+      uint32_t last = id(gate).last_rx_ms();
+      return last != 0 && millis() - last < 45000;
+```
+
 ### Raw Command for Debugging
 
 For debugging and testing, you can send raw hex commands directly to the bus using `send_raw_cmd()`. This accepts hex strings in formats like `"55.0C.00.FF..."` or `"550C00FF..."` (dots/spaces are automatically stripped).

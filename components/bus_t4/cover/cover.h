@@ -71,6 +71,9 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   // Re-run bus discovery and device identification
   void rediscover();
 
+  // millis() of the last packet from the control unit, 0 if none yet
+  uint32_t last_rx_ms() const { return last_rx_ms_; }
+
   // Motor controller configuration (runtime)
   // These send commands to the motor controller to change its settings
   void set_auto_close(bool enable);      // L1 - Auto-close after opening
@@ -171,6 +174,7 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   uint32_t position_report_interval_{1000};  // Position report rate (ms)
   uint32_t last_init_attempt_{0};
   uint32_t last_status_refresh_{0};  // Periodic status refresh
+  uint32_t last_rx_ms_{0};
 
   // Position source tracking
   bool force_estimated_position_{false};  // Ignore encoder reports, always estimate from timing

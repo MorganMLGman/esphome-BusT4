@@ -250,6 +250,7 @@ void BusT4Cover::on_packet(const T4Packet &packet) {
   if (init_ok_ && packet.header.from != target_address_) {
     return;
   }
+  last_rx_ms_ = millis();
 
   ESP_LOGV(TAG, "Received packet from 0x%02X.%02X, protocol=%d",
            packet.header.from.address, packet.header.from.endpoint, packet.header.protocol);
