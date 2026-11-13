@@ -25,8 +25,9 @@ static constexpr uint32_t BUS_IDLE_MS = 100;
 // Bounded so a busy bus cannot starve the transmit path
 static constexpr uint8_t RX_DRAIN_LIMIT = 64;
 
-// A byte takes ~0.5ms at 19200 baud, so this much silence means the frame will not complete
-static constexpr uint32_t FRAME_STALL_MS = 20;
+// A full frame takes at most ~33ms at 19200 baud and arrives without gaps, so this much
+// silence mid-frame means it will not complete
+static constexpr uint32_t FRAME_STALL_MS = 50;
 
 static constexpr TickType_t TX_MIN_INTERVAL = pdMS_TO_TICKS(100);
 
