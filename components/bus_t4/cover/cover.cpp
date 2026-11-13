@@ -21,8 +21,9 @@ cover::CoverTraits BusT4Cover::get_traits() {
 }
 
 void BusT4Cover::setup() {
-  // Initialize with unknown position
-  this->position = cover::COVER_OPEN;
+  // Unknown until the controller answers. Not an end position: a gate at either end reports
+  // OPENED/CLOSED, so whatever leaves this value untouched (STOPPED, PART_OPENED) is mid-way.
+  this->position = 0.5f;
   this->current_operation = cover::COVER_OPERATION_IDLE;
 
   // Load learned durations from flash
@@ -243,6 +244,10 @@ void BusT4Cover::on_packet(const T4Packet &packet) {
   if (packet.size >= 14 && packet.data[9] == FOR_OXI) {
     parse_oxi_packet(packet);
     return;
+  }
+
+  if (packet.header.from == target_address_) {
+    cu_answered_ = true;
   }
 
   // During initialization, accept packets from any source (for device discovery)
@@ -889,15 +894,24 @@ void BusT4Cover::init_device() {
       // Step 7: Request status
       ESP_LOGD(TAG, "Init step 7: requesting status");
       send_info_request(FOR_CU, INF_STATUS);
+      // Idle refreshes poll position only once an encoder has been seen, so ask once here
+      request_position();
       init_step_ = 8;
       break;
 
     case 8:
-      // Step 8: Initialization complete
+      // Steps 1-7 advance on a timer, so a silent or absent control unit (always the case for a
+      // pinned address that is wrong) would otherwise pass as initialized
+      if (!cu_answered_) {
+        ESP_LOGW(TAG, "Control unit 0x%02X.%02X did not answer, repeating initialization",
+                 target_address_.address, target_address_.endpoint);
+        init_step_ = 1;
+        break;
+      }
+      // No publish here: the state is real only once the INF_STATUS reply has published it
       ESP_LOGI(TAG, "Device initialization complete");
       init_ok_ = true;
       init_step_ = 9;
-      publish_state_if_changed();
       break;
 
     default:
@@ -1278,6 +1292,7 @@ void BusT4Cover::rediscover() {
   pos_max_from_cu_ = false;
   pos_max_learned_ = false;
   discovery_attempts_ = 0;
+  cu_answered_ = false;
   init_ok_ = false;
   last_init_attempt_ = 0;
 

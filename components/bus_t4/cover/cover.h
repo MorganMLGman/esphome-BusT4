@@ -124,6 +124,7 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   uint8_t init_step_{0};  // Initialization state machine step
   uint8_t discovery_attempts_{0};  // Discovery retry counter for exponential backoff
   bool controller_found_{false};   // Control unit latched - ignore later responders
+  bool cu_answered_{false};        // Control unit replied since the last (re)discovery
   bool address_pinned_{false};     // Control unit address came from YAML
   uint32_t get_discovery_interval() const;  // Get current discovery retry interval
 
