@@ -394,9 +394,9 @@ For devices that support it, the component polls encoder position during movemen
 4. **Adaptive**: If timing deviates >10% from stored value, it's automatically updated
 5. **Smart Fallback**: Only used when encoder data is unavailable or stale
 
-### 3. Limit Switch Confirmation
+### 3. Status Confirmation
 
-When the gate stops, the component queries the controller's I/O state (INF_IO) to confirm if a limit switch is active. This ensures accurate detection of fully open/closed states even if the time-based estimate is slightly off.
+When the gate stops, the component asks the controller for its status (INF_STATUS) to confirm whether it is fully open or closed, even if the time-based estimate is slightly off. The limit switches themselves are available as [I/O diagnostics](#io-diagnostics).
 
 ### 4. Periodic Status Refresh
 
