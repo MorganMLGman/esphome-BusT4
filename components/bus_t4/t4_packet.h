@@ -82,15 +82,22 @@ enum T4InfoCommand : uint8_t {
   INF_POS_MIN = 0x19,    // Close position
   INF_IO = 0xD1,         // Input/output state (limit switches)
 
-  // Configuration parameters (settable)
-  CFG_AUTOCLS = 0x80,    // Auto-close (L1) - 0x00=off, 0x01=on
-  CFG_PH_CLS = 0x81,     // Close after photo (L2) - 0x00=off, 0x01=on
-  CFG_ALW_CLS = 0x82,    // Always close (L3) - 0x00=off, 0x01=on
-  CFG_STANDBY = 0x83,    // Standby mode - 0x00=off, 0x01=on
-  CFG_PEAK = 0x84,       // Peak mode - 0x00=off, 0x01=on
-  CFG_PRE_FLASH = 0x85,  // Pre-flash warning - 0x00=off, 0x01=on
-  CFG_CLOSE_SPEED = 0x90, // Close speed (0-100)
-  CFG_OPEN_SPEED = 0x91,  // Open speed (0-100)
+  // Configuration parameters (settable). Not contiguous: the gaps hold each feature's time
+  // and mode. Addresses follow gashtaan/nice-bidiwifi-firmware's register names (t4.h),
+  // which pruwait/Nice_BusT4 agrees with (upstream issue #34).
+  CFG_AUTOCLS = 0x80,     // Automatic close - 0x00=off, 0x01=on
+  CFG_PAUSE_TIME = 0x81,  // Automatic close pause, seconds
+  CFG_PH_CLS = 0x84,      // Reclose after photo - 0x00=off, 0x01=on
+  CFG_PH_CLS_TIME = 0x85, // Reclose after photo wait, seconds
+  CFG_ALW_CLS = 0x88,     // Always close - 0x00=off, 0x01=on
+  CFG_ALW_CLS_TIME = 0x89, // Always close wait, seconds
+  CFG_STANDBY = 0x8C,     // Stand-by - 0x00=off, 0x01=on
+  CFG_PEAK = 0x90,        // Starting torque (peak) - 0x00=off, 0x01=on
+  CFG_PRE_FLASH = 0x94,   // Pre-flashing - 0x00=off, 0x01=on
+  CFG_OPEN_SPEED = 0x42,  // Opening speed (0-100)
+  CFG_CLOSE_SPEED = 0x43, // Closing speed (0-100)
+  CFG_OPEN_FORCE = 0x4A,  // Opening force
+  CFG_CLOSE_FORCE = 0x4B, // Closing force
 };
 
 // Request types (byte 11)

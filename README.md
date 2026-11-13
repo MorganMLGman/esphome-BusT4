@@ -259,14 +259,16 @@ lock:
 
 You can change motor controller settings via lambdas. These send SET commands to the controller:
 
-| Method | Description |
-|--------|-------------|
-| `set_auto_close(bool)` | L1 - Enable/disable auto-close after opening |
-| `set_photo_close(bool)` | L2 - Close after photo sensor clears |
-| `set_always_close(bool)` | L3 - Always close (ignore hold-open) |
-| `set_standby(bool)` | Enable/disable standby mode (power saving) |
-| `set_peak_mode(bool)` | Enable/disable peak mode (faster operation) |
-| `set_pre_flash(bool)` | Enable/disable pre-flash warning light |
+| Method | Register | Description |
+|--------|----------|-------------|
+| `set_auto_close(bool)` | `0x80` | Enable/disable auto-close after opening |
+| `set_photo_close(bool)` | `0x84` | Close after photo sensor clears |
+| `set_always_close(bool)` | `0x88` | Always close (ignore hold-open) |
+| `set_standby(bool)` | `0x8C` | Enable/disable standby mode (power saving) |
+| `set_peak_mode(bool)` | `0x90` | Enable/disable starting torque (peak) |
+| `set_pre_flash(bool)` | `0x94` | Enable/disable pre-flash warning light |
+
+> **Changed in v2.0.0:** before it, every method except `set_auto_close` wrote a different register (`set_photo_close(true)` set a 1-second pause, for example). If you used them, check the pause time, photo-close and peak settings on the control unit. The [config switches](#controller-settings-with-readback) below show what the controller actually holds.
 
 Example usage with buttons:
 
@@ -313,12 +315,12 @@ In addition to the named methods (`set_auto_close`, `set_standby`, etc.), you ca
 ```yaml
 number:
   - platform: template
-    name: "Motor Force"
-    min_value: 0
+    name: "Opening Speed"
+    min_value: 1
     max_value: 100
-    step: 5
+    step: 1
     set_action:
-      - lambda: 'id(gate).send_config_set(0x92, (uint8_t)x);'
+      - lambda: 'id(gate).send_config_set(0x42, (uint8_t)x);'
 
   - platform: template
     name: "Pause Duration"
@@ -326,8 +328,10 @@ number:
     max_value: 250
     unit_of_measurement: "s"
     set_action:
-      - lambda: 'id(gate).send_config_set(0x88, (uint8_t)x);'
+      - lambda: 'id(gate).send_config_set(0x81, (uint8_t)x);'
 ```
+
+Addresses are listed in [gashtaan's register table](https://github.com/gashtaan/nice-bidiwifi-firmware/blob/main/firmware/t4.h). A wrong address writes a different setting of the control unit, so check one against that table before wiring it to an entity. Before v2.0.0 this example wrote `0x92` (water hammer) and `0x88` (always close).
 
 ### Bus Connection State
 
