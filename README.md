@@ -530,6 +530,8 @@ Contributions are welcome! Please:
 - Original Bus-T4 work by [@pruwait](https://github.com/pruwait/Nice_BusT4)
 - BiDi-WiFi firmware by [@gashtaan](https://github.com/gashtaan/nice-bidiwifi-firmware)
 - Initial ESPHome ESP32 PoC by [@andrein](https://github.com/andrein/esphome-BusT4)
+- Upstream component by [@makstech](https://github.com/makstech/esphome-BusT4), which this fork tracks
+- Ported into this fork: Robus STA handling by [@loomen](https://github.com/loomen/esphome-BusT4) (upstream PR #39), the stalled-frame resync independently found by [@tothero](https://github.com/tothero/esphome-BusT4), the end-of-run status fix and register sensors by [@fastm3](https://github.com/fastm3/esphome-BusT4), read-back config entities by [@fdriver33](https://github.com/fdriver33/esphome-BusT4), and I/O diagnostics and the bus error counter by [@andrein](https://github.com/andrein/esphome-BusT4)
 
 ## License
 
