@@ -52,6 +52,15 @@ class BusT4Component final : public Component, public uart::UARTDevice {
   // Register a device to receive packet callbacks
   void register_device(BusT4Device *device) { devices_.push_back(device); }
 
+  // The cover sets this once the control unit has answered; parameter entities wait for it
+  void set_controller(T4Source address) {
+    controller_ = address;
+    controller_ready_ = true;
+  }
+  void clear_controller() { controller_ready_ = false; }
+  bool controller_ready() const { return controller_ready_; }
+  T4Source controller_address() const { return controller_; }
+
  private:
   // Receive and transmit share one task so a send can never land mid-frame
   void busTask();
@@ -71,6 +80,9 @@ class BusT4Component final : public Component, public uart::UARTDevice {
   QueueHandle_t txQueue_ = nullptr;
 
   std::vector<BusT4Device *> devices_;
+
+  T4Source controller_{0x00, 0x00};
+  bool controller_ready_{false};
 
   // Cached UART port for direct baud rate register writes during break signal.
   uart_port_t uart_num_ = UART_NUM_MAX;

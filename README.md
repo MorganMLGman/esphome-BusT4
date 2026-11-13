@@ -308,6 +308,33 @@ switch:
       - lambda: id(gate).set_pre_flash(false);
 ```
 
+### Controller Settings with Readback
+
+`switch` and `number` entities on the `bus_t4` platform show what the control unit actually holds: they read the setting once the cover has found the controller, re-read it every `update_interval` (default `60s`), and after a change publish only the value read back. Changes made with Oview or the control unit's buttons show up on the next read. Nothing is written on boot.
+
+```yaml
+switch:
+  - platform: bus_t4
+    setting: auto_close
+    name: "Auto Close"
+
+number:
+  - platform: bus_t4
+    setting: pause_time
+    name: "Pause Time"
+```
+
+| `switch` setting | Register | | `number` setting | Register | Range |
+|---|---|---|---|---|---|
+| `auto_close` | `0x80` | | `opening_speed` | `0x42` | 1-100 % |
+| `photo_close` | `0x84` | | `closing_speed` | `0x43` | 1-100 % |
+| `always_close` | `0x88` | | `pause_time` | `0x81` | 0-250 s |
+| `standby` | `0x8C` | | `photo_close_time` | `0x85` | 0-250 s |
+| `peak` | `0x90` | | `always_close_time` | `0x89` | 0-250 s |
+| `pre_flash` | `0x94` | | | | |
+
+`number` also takes `min_value`, `max_value` and `step` to narrow the range. A setting the controller rejects is logged once and no longer polled; its entity stays unknown. Requires the `bus_t4` cover, which is what finds the control unit.
+
 ### Raw Configuration Parameters
 
 In addition to the named methods (`set_auto_close`, `set_standby`, etc.), you can set any controller parameter by its raw hex address using `send_config_set()`:

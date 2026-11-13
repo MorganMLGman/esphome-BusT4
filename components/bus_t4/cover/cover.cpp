@@ -923,6 +923,7 @@ void BusT4Cover::init_device() {
       ESP_LOGI(TAG, "Device initialization complete");
       init_ok_ = true;
       init_step_ = 9;
+      parent_->set_controller(target_address_);
       break;
 
     default:
@@ -1307,6 +1308,7 @@ void BusT4Cover::rediscover() {
   init_silence_warned_ = false;
   last_gate_status_ = 0xFF;
   init_ok_ = false;
+  parent_->clear_controller();
   last_init_attempt_ = 0;
 
   if (address_pinned_) {
