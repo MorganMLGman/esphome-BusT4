@@ -348,6 +348,33 @@ sensor:
 
 [gashtaan's register table](https://github.com/gashtaan/nice-bidiwifi-firmware/blob/main/firmware/t4.h) names the addresses. A register the controller rejects is logged once and no longer polled.
 
+### I/O Diagnostics
+
+The control unit's diagnostics register (`0xD1`) holds its inputs, limit switches, motor outputs and fault flags. One `binary_sensor` entry polls it every `update_interval` (default `5s`) and publishes the bits you list as diagnostic entities, so Home Assistant keeps their history - a held STOP input, for example, makes the controller ignore every command while it still answers on the bus.
+
+```yaml
+binary_sensor:
+  - platform: bus_t4
+    stop:
+      name: "Stop Input"
+    unlock_m1:
+      name: "Motor 1 Released"
+    bluebus_error:
+      name: "BlueBus Error"
+```
+
+| Key | Meaning |
+|-----|---------|
+| `stop`, `step_by_step`, `open`, `close` | Wired command inputs |
+| `loop_1`, `loop_2` | Loop detector inputs |
+| `open_limit_m1`, `close_limit_m1`, `open_limit_m2`, `close_limit_m2` | Limit switches |
+| `unlock_m1`, `unlock_m2` | Motor released with the manual unlock key |
+| `motor_m1`, `motor_m2` | Motor outputs driven |
+| `thermal`, `standby_active`, `on_battery` | Thermal protection, stand-by, running on the backup battery |
+| `position_error`, `bluebus_error`, `stop_error`, `function_error`, `settings_error` | Faults the controller reports |
+
+The layout follows [gashtaan's diagnostics page](https://github.com/gashtaan/nice-bidiwifi-firmware/blob/main/firmware/web.cpp). Whether an input reads on when its contact is closed or when it is triggered depends on how the controller learned it, and the limit switches swap with the installation side, so compare against the controller's own LEDs before building automations on them.
+
 ### Raw Configuration Parameters
 
 In addition to the named methods (`set_auto_close`, `set_standby`, etc.), you can set any controller parameter by its raw hex address using `send_config_set()`:
