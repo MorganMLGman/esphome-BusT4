@@ -335,6 +335,19 @@ number:
 
 `number` also takes `min_value`, `max_value` and `step` to narrow the range. A setting the controller rejects is logged once and no longer polled; its entity stays unknown. Requires the `bus_t4` cover, which is what finds the control unit.
 
+### Register Sensors
+
+Any control unit register can be read into a sensor, polled every `update_interval` (default `60s`). The reply is decoded as a big-endian integer; `offset` skips a prefix field and `length` (1-4, default: the rest of the reply) picks how many bytes to combine.
+
+```yaml
+sensor:
+  - platform: bus_t4
+    register: 0x4A
+    name: "Opening Force"
+```
+
+[gashtaan's register table](https://github.com/gashtaan/nice-bidiwifi-firmware/blob/main/firmware/t4.h) names the addresses. A register the controller rejects is logged once and no longer polled.
+
 ### Raw Configuration Parameters
 
 In addition to the named methods (`set_auto_close`, `set_standby`, etc.), you can set any controller parameter by its raw hex address using `send_config_set()`:
