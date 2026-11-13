@@ -805,10 +805,12 @@ void BusT4Cover::parse_oxi_packet(const T4Packet &packet) {
 
   // Payload starts at data[14]
   const uint8_t* payload = &packet.data[14];
+  // Payload bytes before the trailing checksum, so short frames cannot expose a stale buffer
+  const uint8_t payload_len = packet.size - 15;
 
   // Remote control list packet (0x25)
   // Contains info about a remote that triggered an action
-  if (command == OXI_REMOTE_LIST && subcommand == 0x01 && sequence == 0x0A) {
+  if (command == OXI_REMOTE_LIST && subcommand == 0x01 && sequence == 0x0A && payload_len >= 9) {
     // Remote serial number (4 bytes, little endian)
     uint32_t remote_serial = (payload[5] << 24) | (payload[4] << 16) | (payload[3] << 8) | payload[2];
     uint8_t remote_command = payload[8] >> 4;  // High nibble
@@ -822,7 +824,7 @@ void BusT4Cover::parse_oxi_packet(const T4Packet &packet) {
 
   // Button read packet (0x26, 0x41)
   // Direct button press detection
-  if (command == OXI_BUTTON_READ && subcommand == 0x41 && sequence == 0x08) {
+  if (command == OXI_BUTTON_READ && subcommand == 0x41 && sequence == 0x08 && payload_len >= 4) {
     uint8_t button = payload[0] >> 4;  // High nibble
     uint32_t remote_serial = (payload[0] & 0x0F) | (payload[1] << 4) | (payload[2] << 12) | (payload[3] << 20);
 
