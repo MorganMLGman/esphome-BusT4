@@ -28,6 +28,9 @@ static constexpr uint8_t DISCOVERY_TYPE_ATTEMPTS = 3;
 // Discovery attempt that warns about silence; the ones after it log only at verbose level
 static constexpr uint8_t DISCOVERY_QUIET_AFTER = 5;
 
+// How long an end-of-run status after a command is taken for the previous run's
+static constexpr uint32_t COMMAND_START_TIMEOUT = 5000;
+
 // Reported by controllers for a position they do not know
 static constexpr uint16_t POSITION_UNKNOWN = 0xFFFF;
 
@@ -73,6 +76,11 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
 
   // Re-run bus discovery and device identification
   void rediscover();
+
+  // Hide BusT4Device's overloads so every command - control(), YAML lambdas, the lock - is
+  // timed for the STA_ENDTIME handling
+  void send_cmd(T4Command cmd);
+  void send_cmd(T4Command cmd, T4Device device);
 
   // millis() of the last packet from the control unit, 0 if none yet
   uint32_t last_rx_ms() const { return last_rx_ms_; }
@@ -129,6 +137,8 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   bool controller_found_{false};   // Control unit latched - ignore later responders
   bool cu_answered_{false};        // Control unit replied since the last (re)discovery
   bool init_silence_warned_{false};
+  uint32_t last_command_ms_{0};
+  bool awaiting_movement_start_{false};  // Commanded run not yet reported as started
   uint8_t last_gate_status_{0xFF};  // Not a real status, so the first reply always logs
   bool address_pinned_{false};     // Control unit address came from YAML
   uint32_t get_discovery_interval() const;  // Get current discovery retry interval

@@ -238,6 +238,29 @@ void BusT4Cover::control(const cover::CoverCall &call) {
   }
 }
 
+// A status that shows the commanded run has started, or already reached its end position
+static bool reports_movement(uint8_t status) {
+  switch (status) {
+    case STA_OPENING:
+    case STA_OPENING_ALT:
+    case STA_CLOSING:
+    case STA_CLOSING_ALT:
+    case STA_OPENED:
+    case STA_CLOSED:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void BusT4Cover::send_cmd(T4Command cmd) { send_cmd(cmd, OVIEW); }
+
+void BusT4Cover::send_cmd(T4Command cmd, T4Device device) {
+  last_command_ms_ = millis();
+  awaiting_movement_start_ = true;
+  BusT4Device::send_cmd(cmd, device);
+}
+
 void BusT4Cover::on_packet(const T4Packet &packet) {
   // Check if this is an OXI receiver packet (remote control)
   // These packets have target FOR_OXI (0x0A) in byte 9
@@ -291,6 +314,9 @@ void BusT4Cover::parse_dep_packet(const T4Packet &packet) {
   // Check for RUN command responses (command byte may have 0x80 subtracted)
   if (command == RUN || command == (RUN - 0x80) || command == OP_STOP || command == OP_OPEN || command == OP_CLOSE) {
     uint8_t status = packet.data[DEP_DATA_OFFSET];
+    if (reports_movement(status)) {
+      awaiting_movement_start_ = false;
+    }
 
     ESP_LOGV(TAG, "RUN/Command response: status=0x%02X", status);
 
@@ -374,6 +400,14 @@ void BusT4Cover::parse_dep_packet(const T4Packet &packet) {
         break;  // Publish now with clamped position, update when confirmed
 
       case STA_ENDTIME:
+        // At least the MC824H acknowledges a command with the ENDTIME of the previous run and
+        // reports the new one 3-4s later; ending the movement here flickered the cover to idle
+        if (awaiting_movement_start_ && millis() - last_command_ms_ < COMMAND_START_TIMEOUT) {
+          ESP_LOGD(TAG, "Ignoring end-of-run status %ums after a command (previous run)",
+                   static_cast<unsigned>(millis() - last_command_ms_));
+          break;
+        }
+        awaiting_movement_start_ = false;
         ESP_LOGI(TAG, "Gate operation ended (timeout)");
         cancel_learning();  // Timeout, can't learn
         last_operation_ = current_operation;
@@ -422,6 +456,9 @@ void BusT4Cover::parse_dep_packet(const T4Packet &packet) {
     }
 
     ESP_LOGV(TAG, "STA packet: status=0x%02X, pos=%d", status, pos);
+    if (reports_movement(status)) {
+      awaiting_movement_start_ = false;
+    }
 
     switch (status) {
       case STA_OPENING:
