@@ -25,6 +25,9 @@ static constexpr float LEARNING_DEVIATION_THRESHOLD = 0.10f;
 // Discovery rounds to wait for a device type 0x04 answer before trusting the address
 static constexpr uint8_t DISCOVERY_TYPE_ATTEMPTS = 3;
 
+// Discovery attempt that warns about silence; the ones after it log only at verbose level
+static constexpr uint8_t DISCOVERY_QUIET_AFTER = 5;
+
 // Reported by controllers for a position they do not know
 static constexpr uint16_t POSITION_UNKNOWN = 0xFFFF;
 
@@ -125,6 +128,8 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   uint8_t discovery_attempts_{0};  // Discovery retry counter for exponential backoff
   bool controller_found_{false};   // Control unit latched - ignore later responders
   bool cu_answered_{false};        // Control unit replied since the last (re)discovery
+  bool init_silence_warned_{false};
+  uint8_t last_gate_status_{0xFF};  // Not a real status, so the first reply always logs
   bool address_pinned_{false};     // Control unit address came from YAML
   uint32_t get_discovery_interval() const;  // Get current discovery retry interval
 

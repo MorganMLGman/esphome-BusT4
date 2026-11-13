@@ -280,7 +280,7 @@ void BusT4Cover::parse_dep_packet(const T4Packet &packet) {
   uint8_t device = packet.message.device;
   uint8_t command = packet.message.command;
 
-  ESP_LOGD(TAG, "DEP packet: device=0x%02X, command=0x%02X, size=%d", device, command, packet.size);
+  ESP_LOGV(TAG, "DEP packet: device=0x%02X, command=0x%02X, size=%d", device, command, packet.size);
   ESP_LOGV(TAG, "DEP raw: %02X %02X %02X %02X %02X %02X",
            packet.data[7], packet.data[8], packet.data[9], packet.data[10],
            packet.data[11], packet.data[12]);
@@ -292,7 +292,7 @@ void BusT4Cover::parse_dep_packet(const T4Packet &packet) {
   if (command == RUN || command == (RUN - 0x80) || command == OP_STOP || command == OP_OPEN || command == OP_CLOSE) {
     uint8_t status = packet.data[DEP_DATA_OFFSET];
 
-    ESP_LOGD(TAG, "RUN/Command response: status=0x%02X", status);
+    ESP_LOGV(TAG, "RUN/Command response: status=0x%02X", status);
 
     // Parse operation status
     switch (status) {
@@ -421,7 +421,7 @@ void BusT4Cover::parse_dep_packet(const T4Packet &packet) {
       }
     }
 
-    ESP_LOGD(TAG, "STA packet: status=0x%02X, pos=%d", status, pos);
+    ESP_LOGV(TAG, "STA packet: status=0x%02X, pos=%d", status, pos);
 
     switch (status) {
       case STA_OPENING:
@@ -472,7 +472,7 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
   uint8_t sequence = packet.message.dmp.sequence;
   uint8_t status = packet.message.dmp.status;
 
-  ESP_LOGD(TAG, "DMP packet: dev=0x%02X, cmd=0x%02X, flags=0x%02X, seq=%d, status=0x%02X",
+  ESP_LOGV(TAG, "DMP packet: dev=0x%02X, cmd=0x%02X, flags=0x%02X, seq=%d, status=0x%02X",
            device, command, flags, sequence, status);
 
   if (payload_len > 0 && packet.size >= DATA_OFFSET + payload_len) {
@@ -563,8 +563,14 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
     case INF_STATUS: {
       // Gate status response
       uint8_t gate_status = packet.data[DATA_OFFSET];
-      ESP_LOGI(TAG, "Gate status: 0x%02X%s", gate_status,
-               awaiting_confirmation_ ? " (confirmation)" : "");
+      // The idle refresh repeats this every 15s, so only a change is worth an info line
+      if (gate_status != last_gate_status_ || awaiting_confirmation_) {
+        ESP_LOGI(TAG, "Gate status: 0x%02X%s", gate_status,
+                 awaiting_confirmation_ ? " (confirmation)" : "");
+      } else {
+        ESP_LOGV(TAG, "Gate status: 0x%02X", gate_status);
+      }
+      last_gate_status_ = gate_status;
 
       switch (gate_status) {
         case STA_OPENED:
@@ -607,7 +613,7 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
     case INF_CUR_POS: {
       uint16_t pos;
       if (!read_position_value(packet, &pos)) break;
-      ESP_LOGD(TAG, "Current position: %d", pos);
+      ESP_LOGV(TAG, "Current position: %d", pos);
       update_position(pos);
       break;
     }
@@ -843,7 +849,16 @@ void BusT4Cover::init_device() {
       // Step 0: Discover devices on the bus
       // Saturate rather than wrap, which would drop the backoff back to 1s
       if (discovery_attempts_ < 255) discovery_attempts_++;
-      ESP_LOGI(TAG, "Initializing device - discovering... (attempt %d)", discovery_attempts_);
+      // Retries run every 10s for as long as nothing answers, so warn once and then go quiet
+      if (discovery_attempts_ == 1) {
+        ESP_LOGI(TAG, "Initializing device - discovering...");
+      } else if (discovery_attempts_ == DISCOVERY_QUIET_AFTER) {
+        ESP_LOGW(TAG, "Nothing answered discovery in %d attempts - check the Bus-T4 connection. "
+                      "Still retrying every %us, quietly.",
+                 discovery_attempts_, static_cast<unsigned>(get_discovery_interval() / 1000));
+      } else {
+        ESP_LOGV(TAG, "Discovery attempt %d", discovery_attempts_);
+      }
       T4Source broadcast{0xFF, 0xFF};
       uint8_t who_msg[5] = { FOR_ALL, INF_WHO, REQ_GET, 0x00, 0x00 };
       T4Packet who_packet(broadcast, parent_->get_address(), DMP, who_msg, sizeof(who_msg));
@@ -910,8 +925,11 @@ void BusT4Cover::init_device() {
       // Steps 1-7 advance on a timer, so a silent or absent control unit (always the case for a
       // pinned address that is wrong) would otherwise pass as initialized
       if (!cu_answered_) {
-        ESP_LOGW(TAG, "Control unit 0x%02X.%02X did not answer, repeating initialization",
-                 target_address_.address, target_address_.endpoint);
+        if (!init_silence_warned_) {
+          ESP_LOGW(TAG, "Control unit 0x%02X.%02X did not answer, repeating initialization quietly",
+                   target_address_.address, target_address_.endpoint);
+          init_silence_warned_ = true;
+        }
         init_step_ = 1;
         break;
       }
@@ -969,7 +987,7 @@ void BusT4Cover::request_status_confirmation() {
 
 void BusT4Cover::update_position(uint16_t encoder_pos) {
   if (encoder_pos == POSITION_UNKNOWN) {
-    ESP_LOGD(TAG, "Controller reports no position");
+    ESP_LOGV(TAG, "Controller reports no position");
     return;
   }
 
@@ -996,7 +1014,7 @@ void BusT4Cover::update_position(uint16_t encoder_pos) {
     }
 
     this->position = pos;
-    ESP_LOGD(TAG, "Encoder position: %d -> %.1f%%", encoder_pos, pos * 100);
+    ESP_LOGV(TAG, "Encoder position: %d -> %.1f%%", encoder_pos, pos * 100);
   }
 
   // Check if we've reached target position
@@ -1237,7 +1255,7 @@ bool BusT4Cover::read_position_value(const T4Packet &packet, uint16_t *out,
   }
 
   if (value == POSITION_UNKNOWN) {
-    ESP_LOGD(TAG, "Controller reports no position for cmd=0x%02X", packet.message.command);
+    ESP_LOGV(TAG, "Controller reports no position for cmd=0x%02X", packet.message.command);
     return false;
   }
 
@@ -1300,6 +1318,8 @@ void BusT4Cover::rediscover() {
   pos_max_learned_ = false;
   discovery_attempts_ = 0;
   cu_answered_ = false;
+  init_silence_warned_ = false;
+  last_gate_status_ = 0xFF;
   init_ok_ = false;
   last_init_attempt_ = 0;
 

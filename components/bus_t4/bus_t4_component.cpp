@@ -71,7 +71,7 @@ void BusT4Component::loop() {
 
     // Log foreign destinations without dropping them yet
     if (!t4_addressed_to(packet.header.to, address_)) {
-      ESP_LOGD(TAG, "Packet addressed to 0x%02X.%02X, not us: %s",
+      ESP_LOGV(TAG, "Packet addressed to 0x%02X.%02X, not us: %s",
                packet.header.to.address, packet.header.to.endpoint,
                format_hex_pretty(packet.data, packet.size).c_str());
     }
@@ -159,7 +159,7 @@ void BusT4Component::busTask() {
             }
 
             // Both checksums valid - accept packet
-            ESP_LOGD(TAG, "Received packet: %s (%d bytes)",
+            ESP_LOGV(TAG, "Received packet: %s (%d bytes)",
                      format_hex_pretty(packet.data, packet.size).c_str(), packet.size);
             if (!xQueueSend(rxQueue_, &packet, pdMS_TO_TICKS(100))) {
               ESP_LOGW(TAG, "RX queue full, dropping packet");
@@ -190,9 +190,9 @@ void BusT4Component::busTask() {
         }
 
         if (frame.raw) {
-          ESP_LOGD(TAG, "Sending raw: %s", format_hex_pretty(frame.data, frame.size).c_str());
+          ESP_LOGV(TAG, "Sending raw: %s", format_hex_pretty(frame.data, frame.size).c_str());
         } else {
-          ESP_LOGD(TAG, "Sending packet: %s",
+          ESP_LOGV(TAG, "Sending packet: %s",
                    format_hex_pretty(frame.data + 2, frame.size - 3).c_str());
         }
         send_break();

@@ -427,6 +427,17 @@ Device information (manufacturer, product, firmware) is logged at startup.
 2. Check logs for "Learned new open/close duration" messages
 3. Manually set `open_duration` and `close_duration` if auto-learning fails
 
+### Seeing raw bus traffic
+
+Packet dumps, per-poll status and position replies, and discovery retries are logged at `VERBOSE` so the default `DEBUG` log stays readable. To see them:
+
+```yaml
+logger:
+  logs:
+    bus_t4: VERBOSE
+    bus_t4.cover: VERBOSE
+```
+
 ### BiDi-WiFi won't enter flash mode
 
 1. Hold IO0 to GND
