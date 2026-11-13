@@ -25,6 +25,9 @@ static constexpr uint32_t BUS_IDLE_MS = 100;
 // Bounded so a busy bus cannot starve the transmit path
 static constexpr uint8_t RX_DRAIN_LIMIT = 64;
 
+// A byte takes ~0.5ms at 19200 baud, so this much silence means the frame will not complete
+static constexpr uint32_t FRAME_STALL_MS = 20;
+
 static constexpr TickType_t TX_MIN_INTERVAL = pdMS_TO_TICKS(100);
 
 void BusT4Component::setup() {
@@ -166,6 +169,14 @@ void BusT4Component::busTask() {
           rx_state = WAIT_SYNC;
           break;
       }
+    }
+
+    // A truncated frame would otherwise hold rx_state forever and, with it, every transmit -
+    // including the polls the controller needs before it says anything again
+    if (rx_state != WAIT_SYNC && millis() - last_rx_ms >= FRAME_STALL_MS) {
+      ESP_LOGW(TAG, "Frame stalled after %u of %u bytes, resyncing",
+               static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size));
+      rx_state = WAIT_SYNC;
     }
 
     // Transmit only between frames, and only once the bus has gone quiet
