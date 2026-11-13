@@ -898,8 +898,11 @@ void BusT4Cover::init_device() {
       // Step 7: Request status
       ESP_LOGD(TAG, "Init step 7: requesting status");
       send_info_request(FOR_CU, INF_STATUS);
-      // Idle refreshes poll position only once an encoder has been seen, so ask once here
-      request_position();
+      // Idle refreshes poll position only once an encoder has been seen, so ask once here;
+      // Robus is skipped there too, since it rejects position queries
+      if (!is_robus_) {
+        request_position();
+      }
       init_step_ = 8;
       break;
 
