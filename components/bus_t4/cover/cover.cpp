@@ -30,7 +30,7 @@ void BusT4Cover::setup() {
 
   // Load learned durations from flash
   load_learned_durations();
-  pos_max_pref_ = global_preferences->make_preference<LearnedPosMax>(fnv1_hash("bus_t4_cover_pos_max"));
+  pos_max_pref_ = global_preferences->make_preference<LearnedPosMax>(fnv1_hash("bus_t4_cover_pos_max_v2"));
   load_learned_pos_max();
 
   if (address_pinned_) {
@@ -529,6 +529,7 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
         ESP_LOGI(TAG, "Plain position read refused (0x%02X), retrying with a motor index", status);
         indexed_position_ = true;
         request_position();
+        probe_indexed_registers();
       } else if (!indexed_position_seen_ && !position_unsupported_) {
         ESP_LOGI(TAG, "Indexed position read refused too, keeping the time-based position");
         position_unsupported_ = true;
@@ -565,6 +566,15 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
     T4Packet cont_packet(target_address_, parent_->get_address(), DMP, cont_msg, sizeof(cont_msg));
     write(&cont_packet, 0);
     // Still process the partial data we received
+  }
+
+  // Replies to probe_indexed_registers(): logged, not applied, so motor 2 cannot overwrite motor 1.
+  // Controllers that answer plain reads never set indexed_position_ and keep the handlers below.
+  if (indexed_position_ && payload_len == 3 &&
+      (command == INF_POS_MAX || command == INF_POS_MIN || command == INF_MAX_OPN || command == INF_MIN_CLS)) {
+    uint16_t value = (packet.data[DATA_OFFSET + 1] << 8) | packet.data[DATA_OFFSET + 2];
+    ESP_LOGI(TAG, "Register 0x%02X motor %u: %u", command, packet.data[DATA_OFFSET] + 1, value);
+    return;
   }
 
   switch (command) {
@@ -672,6 +682,11 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
       if (payload_len == 3 && packet.data[DATA_OFFSET] != 0x00) {
         ESP_LOGD(TAG, "Motor %u position: %u", packet.data[DATA_OFFSET] + 1, pos);
         indexed_position_seen_ = true;
+        if (packet.data[DATA_OFFSET] == 0x01 && !force_estimated_position_) {
+          pos2_current_ = pos;
+          last_encoder2_update_ = millis();
+          if (has_encoder_) apply_encoder_position();
+        }
         break;
       }
       indexed_position_seen_ = true;
@@ -981,11 +996,20 @@ void BusT4Cover::init_oxi_device() {
 void BusT4Cover::request_position() {
   if (parent_ == nullptr || force_estimated_position_ || position_unsupported_) return;
   if (indexed_position_) {
-    // Both leaves have their own encoder; for now the cover follows motor 1 and motor 2 is only logged
-    send_indexed_info_request(FOR_CU, INF_CUR_POS, 0x00);
-    send_indexed_info_request(FOR_CU, INF_CUR_POS, 0x01);
+    send_indexed_info_request(FOR_CU, INF_CUR_POS, 0x00);  // motor 1
+    send_indexed_info_request(FOR_CU, INF_CUR_POS, 0x01);  // motor 2
   } else {
     send_info_request(FOR_CU, INF_CUR_POS);
+  }
+}
+
+void BusT4Cover::probe_indexed_registers() {
+  // Which of the open, close and limit positions the controller gives per motor, to find a scale
+  // before the first full open. Replies and refusals arrive in this order.
+  for (T4InfoCommand reg : {INF_POS_MAX, INF_POS_MIN, INF_MAX_OPN, INF_MIN_CLS}) {
+    for (uint8_t motor = 0; motor < 2; motor++) {
+      send_indexed_info_request(FOR_CU, reg, motor);
+    }
   }
 }
 
@@ -1021,6 +1045,10 @@ void BusT4Cover::update_position(uint16_t encoder_pos) {
   has_encoder_ = true;
   last_encoder_update_ = millis();
 
+  apply_encoder_position();
+}
+
+void BusT4Cover::apply_encoder_position() {
   // The leaf backs off the end stop a few counts once it has stopped, so the resting encoder
   // reads below the value learned in motion. The controller's end status is authoritative.
   if (current_operation == cover::COVER_OPERATION_IDLE &&
@@ -1030,8 +1058,15 @@ void BusT4Cover::update_position(uint16_t encoder_pos) {
 
   // Convert encoder position to percentage
   if (pos_max_ > pos_min_) {
-    float pos = static_cast<float>(encoder_pos - pos_min_) / static_cast<float>(pos_max_ - pos_min_);
+    float pos = static_cast<float>(pos_current_ - pos_min_) / static_cast<float>(pos_max_ - pos_min_);
     pos = std::max(0.0f, std::min(1.0f, pos));  // Clamp to 0-1
+
+    // The two leaves of a swing gate have their own encoders and ranges and do not move in step
+    // (one leads on opening, the other on closing), so the gate's position is their mean
+    if (pos2_max_ > 0 && millis() - last_encoder2_update_ <= 3 * position_report_interval_) {
+      float pos2 = std::min(1.0f, static_cast<float>(pos2_current_) / static_cast<float>(pos2_max_));
+      pos = (pos + pos2) / 2;
+    }
 
     // Consider very small values as fully closed
     if (pos < CLOSED_POSITION_THRESHOLD) {
@@ -1039,7 +1074,7 @@ void BusT4Cover::update_position(uint16_t encoder_pos) {
     }
 
     this->position = pos;
-    ESP_LOGV(TAG, "Encoder position: %d -> %.1f%%", encoder_pos, pos * 100);
+    ESP_LOGV(TAG, "Encoder position: %d -> %.1f%%", pos_current_, pos * 100);
   }
 
   // Check if we've reached target position
@@ -1291,37 +1326,54 @@ bool BusT4Cover::read_position_value(const T4Packet &packet, uint16_t *out,
 void BusT4Cover::learn_open_position() {
   // A controller that reports no open position leaves the scale on a compiled-in default,
   // so take the reading at the one point where the gate's position is known
-  if (pos_max_from_cu_ || !has_encoder_ || pos_current_ <= pos_min_) return;
-  if (pos_max_ == pos_current_) return;
-  if (millis() - last_encoder_update_ > 2 * position_report_interval_) return;
+  bool learned = false;
 
-  pos_max_ = pos_current_;
-  pos_max_learned_ = true;
-  ESP_LOGI(TAG, "Learned open position: %d", pos_max_);
-  save_learned_pos_max();
+  if (pos2_current_ > 0 && pos2_current_ != pos2_max_ &&
+      millis() - last_encoder2_update_ <= 2 * position_report_interval_) {
+    pos2_max_ = pos2_current_;
+    ESP_LOGI(TAG, "Learned motor 2 open position: %d", pos2_max_);
+    learned = true;
+  }
+
+  if (!pos_max_from_cu_ && has_encoder_ && pos_current_ > pos_min_ && pos_max_ != pos_current_ &&
+      millis() - last_encoder_update_ <= 2 * position_report_interval_) {
+    pos_max_ = pos_current_;
+    pos_max_learned_ = true;
+    ESP_LOGI(TAG, "Learned open position: %d", pos_max_);
+    learned = true;
+  }
+
+  // Never persist motor 2 next to a motor 1 scale that is still the default
+  if (learned && pos_max_learned_) save_learned_pos_max();
 }
 
-void BusT4Cover::save_learned_pos_max() {
-  // Every full open re-learns the value; only a real change is worth a flash write
-  if (saved_pos_max_ != 0 && std::abs(static_cast<int>(pos_max_) - saved_pos_max_) * 50 < saved_pos_max_) return;
+static bool differs_by_2_percent(int a, int b) { return std::abs(a - b) * 50 >= b; }
 
-  LearnedPosMax data{pos_max_, true};
+void BusT4Cover::save_learned_pos_max() {
+  // Every full open re-learns the values; only a real change is worth a flash write
+  if (saved_pos_max_ != 0 && !differs_by_2_percent(pos_max_, saved_pos_max_) &&
+      (pos2_max_ == 0 || !differs_by_2_percent(pos2_max_, saved_pos2_max_))) {
+    return;
+  }
+
+  LearnedPosMax data{pos_max_, pos2_max_, true};
   if (pos_max_pref_.save(&data)) {
     saved_pos_max_ = pos_max_;
-    ESP_LOGI(TAG, "Saved learned open position to flash: %d", pos_max_);
+    saved_pos2_max_ = pos2_max_;
+    ESP_LOGI(TAG, "Saved learned open positions to flash: %d, %d", pos_max_, pos2_max_);
   } else {
-    ESP_LOGW(TAG, "Failed to save learned open position to flash");
+    ESP_LOGW(TAG, "Failed to save learned open positions to flash");
   }
 }
 
 void BusT4Cover::load_learned_pos_max() {
   LearnedPosMax data;
-  if (!pos_max_pref_.load(&data) || !data.valid || data.value <= pos_min_) return;
+  if (!pos_max_pref_.load(&data) || !data.valid || data.motor1 <= pos_min_) return;
 
-  saved_pos_max_ = data.value;
-  pos_max_ = data.value;
+  saved_pos_max_ = pos_max_ = data.motor1;
+  saved_pos2_max_ = pos2_max_ = data.motor2;
   pos_max_learned_ = true;
-  ESP_LOGI(TAG, "Loaded learned open position from flash: %d", pos_max_);
+  ESP_LOGI(TAG, "Loaded learned open positions from flash: %d, %d", pos_max_, pos2_max_);
 }
 
 void BusT4Cover::accept_controller(T4Source addr, const char *via) {
@@ -1365,6 +1417,8 @@ void BusT4Cover::rediscover() {
   encoder_max_ = 0;
   pos_max_from_cu_ = false;
   pos_max_learned_ = false;
+  pos2_max_ = 0;
+  pos2_current_ = 0;
   load_learned_pos_max();
   indexed_position_ = false;
   position_unsupported_ = false;

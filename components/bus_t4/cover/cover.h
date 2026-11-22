@@ -43,7 +43,8 @@ struct LearnedDurations {
 
 // Structure for persisting the open position learned from the encoder
 struct LearnedPosMax {
-  uint16_t value;
+  uint16_t motor1;
+  uint16_t motor2;  // 0 = not learned
   bool valid;
 };
 
@@ -115,12 +116,14 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
 
   // Request current position from controller
   void request_position();
+  void probe_indexed_registers();
 
   // Request status from controller
   void request_status();
 
   // Update position from encoder value
   void update_position(uint16_t encoder_pos);
+  void apply_encoder_position();  // Turn the stored encoder readings into the cover position
 
   // Decode a position payload, whose width varies by controller
   bool read_position_value(const T4Packet &packet, uint16_t *out, bool walky_one_byte = true) const;
@@ -191,6 +194,7 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   ESPPreferenceObject pref_;             // Preference storage for learned values
   ESPPreferenceObject pos_max_pref_;     // Preference storage for the learned open position
   uint16_t saved_pos_max_{0};            // What pos_max_pref_ holds, 0 = nothing saved
+  uint16_t saved_pos2_max_{0};
 
   // Timing
   uint32_t last_position_update_{0};
@@ -206,6 +210,9 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   bool position_unsupported_{false}; // Indexed read was refused too, stop polling
   bool indexed_position_seen_{false};  // An indexed read has been answered at least once
   bool has_encoder_{false};          // True if device reports encoder positions
+  uint16_t pos2_current_{0};         // Motor 2 encoder, read only where the controller needs indexed reads
+  uint16_t pos2_max_{0};             // Motor 2 position at full open, 0 = unknown
+  uint32_t last_encoder2_update_{0};
   uint32_t last_encoder_update_{0};  // Last time we got encoder data
 
   // State tracking for change detection
