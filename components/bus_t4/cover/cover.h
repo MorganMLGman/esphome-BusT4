@@ -116,7 +116,7 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
 
   // Request current position from controller
   void request_position();
-  void probe_indexed_registers();
+  void request_open_positions();
 
   // Request status from controller
   void request_status();
@@ -212,6 +212,7 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   bool has_encoder_{false};          // True if device reports encoder positions
   uint16_t pos2_current_{0};         // Motor 2 encoder, read only where the controller needs indexed reads
   uint16_t pos2_max_{0};             // Motor 2 position at full open, 0 = unknown
+  bool pos2_max_from_cu_{false};     // pos2_max_ came from the controller rather than the encoder
   uint32_t last_encoder2_update_{0};
   uint32_t last_encoder_update_{0};  // Last time we got encoder data
 

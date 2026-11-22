@@ -161,6 +161,9 @@ void BusT4Cover::dump_config() {
     if (encoder_max_ > 0) {
       ESP_LOGCONFIG(TAG, "  Encoder max: %d", encoder_max_);
     }
+    if (pos2_max_ > 0) {
+      ESP_LOGCONFIG(TAG, "  Motor 2 open position: %d%s", pos2_max_, pos2_max_from_cu_ ? "" : " (learned)");
+    }
 
     // Device identification
     if (!manufacturer_.empty()) {
@@ -529,7 +532,7 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
         ESP_LOGI(TAG, "Plain position read refused (0x%02X), retrying with a motor index", status);
         indexed_position_ = true;
         request_position();
-        probe_indexed_registers();
+        request_open_positions();
       } else if (!indexed_position_seen_ && !position_unsupported_) {
         ESP_LOGI(TAG, "Indexed position read refused too, keeping the time-based position");
         position_unsupported_ = true;
@@ -568,12 +571,22 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
     // Still process the partial data we received
   }
 
-  // Replies to probe_indexed_registers(): logged, not applied, so motor 2 cannot overwrite motor 1.
-  // Controllers that answer plain reads never set indexed_position_ and keep the handlers below.
-  if (indexed_position_ && payload_len == 3 &&
-      (command == INF_POS_MAX || command == INF_POS_MIN || command == INF_MAX_OPN || command == INF_MIN_CLS)) {
+  // Indexed read of each motor's open position (04/12, see request_open_positions). A controller that
+  // answers plain reads never sets indexed_position_ and keeps the INF_MAX_OPN handler below.
+  if (indexed_position_ && payload_len == 3 && command == INF_MAX_OPN) {
+    uint8_t motor = packet.data[DATA_OFFSET];
     uint16_t value = (packet.data[DATA_OFFSET + 1] << 8) | packet.data[DATA_OFFSET + 2];
-    ESP_LOGI(TAG, "Register 0x%02X motor %u: %u", command, packet.data[DATA_OFFSET] + 1, value);
+    ESP_LOGI(TAG, "Open position of motor %u: %u", motor + 1, value);
+    if (value > 0 && value != POSITION_UNKNOWN) {
+      if (motor == 0) {
+        pos_max_ = value;
+        pos_max_from_cu_ = true;
+        pos_max_learned_ = false;
+      } else if (motor == 1) {
+        pos2_max_ = value;
+        pos2_max_from_cu_ = true;
+      }
+    }
     return;
   }
 
@@ -1003,14 +1016,11 @@ void BusT4Cover::request_position() {
   }
 }
 
-void BusT4Cover::probe_indexed_registers() {
-  // Which of the open, close and limit positions the controller gives per motor, to find a scale
-  // before the first full open. Replies and refusals arrive in this order.
-  for (T4InfoCommand reg : {INF_POS_MAX, INF_POS_MIN, INF_MAX_OPN, INF_MIN_CLS}) {
-    for (uint8_t motor = 0; motor < 2; motor++) {
-      send_indexed_info_request(FOR_CU, reg, motor);
-    }
-  }
+void BusT4Cover::request_open_positions() {
+  // The POA3R30 answers 04/12 per motor with the position it rests at when fully open, which is
+  // the scale the plain open-position registers (04/18) refuse to give
+  send_indexed_info_request(FOR_CU, INF_MAX_OPN, 0x00);  // motor 1
+  send_indexed_info_request(FOR_CU, INF_MAX_OPN, 0x01);  // motor 2
 }
 
 void BusT4Cover::request_status() {
@@ -1328,7 +1338,7 @@ void BusT4Cover::learn_open_position() {
   // so take the reading at the one point where the gate's position is known
   bool learned = false;
 
-  if (pos2_current_ > 0 && pos2_current_ != pos2_max_ &&
+  if (!pos2_max_from_cu_ && pos2_current_ > 0 && pos2_current_ != pos2_max_ &&
       millis() - last_encoder2_update_ <= 2 * position_report_interval_) {
     pos2_max_ = pos2_current_;
     ESP_LOGI(TAG, "Learned motor 2 open position: %d", pos2_max_);
@@ -1418,6 +1428,7 @@ void BusT4Cover::rediscover() {
   pos_max_from_cu_ = false;
   pos_max_learned_ = false;
   pos2_max_ = 0;
+  pos2_max_from_cu_ = false;
   pos2_current_ = 0;
   load_learned_pos_max();
   indexed_position_ = false;
