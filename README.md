@@ -112,7 +112,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/MorganMLGman/esphome-BusT4
-      ref: v2.1.0
+      ref: v2.2.0
       refresh: never
     components: [bus_t4]
 
@@ -144,7 +144,7 @@ Pin an exact release. ESPHome re-checks a git source once a day, so a moving ref
 
 | `ref` | You get |
 |-------|---------|
-| `v2.1.0` | That exact release, frozen. Add `refresh: never` alongside it. Recommended. |
+| `v2.2.0` | That exact release, frozen. Add `refresh: never` alongside it. Recommended. |
 | omitted | Whatever is on `master`, including unreleased work. |
 
 This fork does not publish a moving major tag such as `v2`.
@@ -160,7 +160,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/MorganMLGman/esphome-BusT4
-      ref: v2.1.0
+      ref: v2.2.0
       refresh: never
     components: [bus_t4]
 
@@ -205,6 +205,7 @@ button:
 |----------|------|---------|-------------|
 | `address` | hex | `0x5090` | Device address on the bus |
 | `bus_errors` | sensor | - | Diagnostic count of bad frames since boot (checksum, length, cut off mid-frame, RX queue full). A steady rise points at wiring or interference. |
+| `last_bus_error` | text_sensor | - | Diagnostic text sensor with the newest bad frame: the running error number, what failed and the frame bytes, e.g. `#3 header checksum, expected 0x4C got 0x4D: 50.90.00.03...`. Reads `none` until the first error. Pairs with `bus_errors`. |
 
 #### Cover Platform
 

@@ -6,6 +6,7 @@
 #include <functional>
 #include <vector>
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
 #include "t4_packet.h"
 
@@ -52,6 +53,7 @@ class BusT4Component final : public Component, public uart::UARTDevice {
   T4Source get_address() const { return address_; }
 
   void set_bus_errors_sensor(sensor::Sensor *sensor) { bus_errors_sensor_ = sensor; }
+  void set_last_bus_error_sensor(text_sensor::TextSensor *sensor) { last_error_sensor_ = sensor; }
 
   // Register a device to receive packet callbacks
   void register_device(BusT4Device *device) { devices_.push_back(device); }
@@ -72,6 +74,9 @@ class BusT4Component final : public Component, public uart::UARTDevice {
 
   bool queue_frame(const T4Frame &frame, TickType_t xTicksToWait);
 
+  // Count a bad frame and keep a description of it for the last_bus_error text sensor
+  void note_rx_error(const uint8_t *data, size_t len, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+
   // Send a BusT4 break signal (~1ms low pulse) before each packet.
   // Temporarily lowers UART baud rate to produce the correct break duration.
   void send_break();
@@ -90,6 +95,12 @@ class BusT4Component final : public Component, public uart::UARTDevice {
   std::atomic<uint32_t> rx_errors_{0};
   uint32_t published_errors_{0};
   sensor::Sensor *bus_errors_sensor_{nullptr};
+
+  // The newest bad frame, written by the bus task and published from loop()
+  text_sensor::TextSensor *last_error_sensor_{nullptr};
+  Mutex last_error_lock_;
+  char last_error_[256] = {};
+  bool last_error_pending_{false};
 
   T4Source controller_{0x00, 0x00};
   bool controller_ready_{false};

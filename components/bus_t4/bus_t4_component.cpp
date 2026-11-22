@@ -9,12 +9,16 @@
 
 #include <esp_rom_sys.h>
 
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+
 namespace esphome::bus_t4 {
 
 static const char *TAG = "bus_t4";
 
 // Bumped when tagging a release; checked against the tag by CI
-static const char *VERSION = "2.1.0";
+static const char *VERSION = "2.2.0";
 
 // Break signal baud rate: sending 0x00 at 9200 baud produces a ~1ms low pulse
 // on a 19200 baud bus. Reference: pruwait/Nice_BusT4 nice-bust4.h
@@ -88,6 +92,41 @@ void BusT4Component::loop() {
     published_errors_ = errors;
     bus_errors_sensor_->publish_state(errors);
   }
+
+  if (last_error_sensor_ != nullptr) {
+    if (!last_error_sensor_->has_state()) last_error_sensor_->publish_state("none");
+
+    char text[sizeof(last_error_)];
+    bool pending;
+    {
+      LockGuard guard(last_error_lock_);
+      pending = last_error_pending_;
+      if (pending) {
+        memcpy(text, last_error_, sizeof(text));
+        last_error_pending_ = false;
+      }
+    }
+    if (pending) last_error_sensor_->publish_state(text);
+  }
+}
+
+void BusT4Component::note_rx_error(const uint8_t *data, size_t len, const char *fmt, ...) {
+  const uint32_t number = ++rx_errors_;
+  if (last_error_sensor_ == nullptr) return;
+
+  char what[48];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(what, sizeof(what), fmt, args);
+  va_end(args);
+
+  char hex[format_hex_pretty_size(sizeof(T4Packet::data))];
+  format_hex_pretty_to(hex, sizeof(hex), data, len, '.');
+
+  // The number keeps two identical frames distinct for Home Assistant's history
+  LockGuard guard(last_error_lock_);
+  snprintf(last_error_, sizeof(last_error_), "#%u %s: %s", static_cast<unsigned>(number), what, hex);
+  last_error_pending_ = true;
 }
 
 void BusT4Component::dump_config() {
@@ -146,7 +185,8 @@ void BusT4Component::busTask() {
               ESP_LOGW(TAG, "Header checksum mismatch: expected 0x%02X, got 0x%02X: %s",
                        header_check, packet.data[6],
                        format_hex_pretty(packet.data, packet.size).c_str());
-              rx_errors_++;
+              note_rx_error(packet.data, packet.size, "header checksum, expected 0x%02X got 0x%02X",
+                            header_check, packet.data[6]);
               rx_state = WAIT_SYNC;
               break;
             }
@@ -161,7 +201,8 @@ void BusT4Component::busTask() {
                 ESP_LOGW(TAG, "Payload checksum mismatch: expected 0x%02X, got 0x%02X: %s",
                          payload_check, packet.data[packet.size - 1],
                          format_hex_pretty(packet.data, packet.size).c_str());
-                rx_errors_++;
+                note_rx_error(packet.data, packet.size, "payload checksum, expected 0x%02X got 0x%02X",
+                              payload_check, packet.data[packet.size - 1]);
                 rx_state = WAIT_SYNC;
                 break;
               }
@@ -172,11 +213,11 @@ void BusT4Component::busTask() {
                      format_hex_pretty(packet.data, packet.size).c_str(), packet.size);
             if (!xQueueSend(rxQueue_, &packet, pdMS_TO_TICKS(100))) {
               ESP_LOGW(TAG, "RX queue full, dropping packet");
-              rx_errors_++;
+              note_rx_error(packet.data, packet.size, "RX queue full");
             }
           } else {
             ESP_LOGW(TAG, "Trailing size mismatch: expected 0x%02X, got 0x%02X", expected_size, byte);
-            rx_errors_++;
+            note_rx_error(packet.data, packet.size, "trailing size, expected 0x%02X got 0x%02X", expected_size, byte);
           }
           rx_state = WAIT_SYNC;
           break;
@@ -188,7 +229,8 @@ void BusT4Component::busTask() {
     if (rx_state != WAIT_SYNC && millis() - last_rx_ms >= FRAME_STALL_MS) {
       ESP_LOGW(TAG, "Frame stalled after %u of %u bytes, resyncing",
                static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size));
-      rx_errors_++;
+      note_rx_error(packet.data, packet.size, "stalled after %u of %u bytes",
+                    static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size));
       rx_state = WAIT_SYNC;
     }
 
