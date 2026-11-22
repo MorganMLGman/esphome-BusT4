@@ -3,6 +3,7 @@
 #include "esphome/core/alloc_helpers.h"
 #include "esphome/core/helpers.h"
 #include <cmath>
+#include <cstdlib>
 #include <string>
 #include <algorithm>
 #include <cctype>
@@ -29,6 +30,8 @@ void BusT4Cover::setup() {
 
   // Load learned durations from flash
   load_learned_durations();
+  pos_max_pref_ = global_preferences->make_preference<LearnedPosMax>(fnv1_hash("bus_t4_cover_pos_max"));
+  load_learned_pos_max();
 
   if (address_pinned_) {
     ESP_LOGI(TAG, "Control unit pinned to 0x%02X.%02X, skipping discovery",
@@ -526,7 +529,7 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
         ESP_LOGI(TAG, "Plain position read refused (0x%02X), retrying with a motor index", status);
         indexed_position_ = true;
         request_position();
-      } else if (!position_unsupported_) {
+      } else if (!indexed_position_seen_ && !position_unsupported_) {
         ESP_LOGI(TAG, "Indexed position read refused too, keeping the time-based position");
         position_unsupported_ = true;
       }
@@ -666,6 +669,12 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
                  format_hex_pretty(packet.data + DATA_OFFSET, payload_len).c_str());
       }
       if (!read_position_value(packet, &pos)) break;
+      if (payload_len == 3 && packet.data[DATA_OFFSET] != 0x00) {
+        ESP_LOGD(TAG, "Motor %u position: %u", packet.data[DATA_OFFSET] + 1, pos);
+        indexed_position_seen_ = true;
+        break;
+      }
+      indexed_position_seen_ = true;
       ESP_LOGV(TAG, "Current position: %d", pos);
       update_position(pos);
       break;
@@ -972,7 +981,9 @@ void BusT4Cover::init_oxi_device() {
 void BusT4Cover::request_position() {
   if (parent_ == nullptr || force_estimated_position_ || position_unsupported_) return;
   if (indexed_position_) {
-    send_indexed_info_request(FOR_CU, INF_CUR_POS, 0x00);  // motor 1
+    // Both leaves have their own encoder; for now the cover follows motor 1 and motor 2 is only logged
+    send_indexed_info_request(FOR_CU, INF_CUR_POS, 0x00);
+    send_indexed_info_request(FOR_CU, INF_CUR_POS, 0x01);
   } else {
     send_info_request(FOR_CU, INF_CUR_POS);
   }
@@ -1009,6 +1020,13 @@ void BusT4Cover::update_position(uint16_t encoder_pos) {
   // Mark that we have encoder support and update timestamp
   has_encoder_ = true;
   last_encoder_update_ = millis();
+
+  // The leaf backs off the end stop a few counts once it has stopped, so the resting encoder
+  // reads below the value learned in motion. The controller's end status is authoritative.
+  if (current_operation == cover::COVER_OPERATION_IDLE &&
+      (this->position == cover::COVER_OPEN || this->position == cover::COVER_CLOSED)) {
+    return;
+  }
 
   // Convert encoder position to percentage
   if (pos_max_ > pos_min_) {
@@ -1280,6 +1298,30 @@ void BusT4Cover::learn_open_position() {
   pos_max_ = pos_current_;
   pos_max_learned_ = true;
   ESP_LOGI(TAG, "Learned open position: %d", pos_max_);
+  save_learned_pos_max();
+}
+
+void BusT4Cover::save_learned_pos_max() {
+  // Every full open re-learns the value; only a real change is worth a flash write
+  if (saved_pos_max_ != 0 && std::abs(static_cast<int>(pos_max_) - saved_pos_max_) * 50 < saved_pos_max_) return;
+
+  LearnedPosMax data{pos_max_, true};
+  if (pos_max_pref_.save(&data)) {
+    saved_pos_max_ = pos_max_;
+    ESP_LOGI(TAG, "Saved learned open position to flash: %d", pos_max_);
+  } else {
+    ESP_LOGW(TAG, "Failed to save learned open position to flash");
+  }
+}
+
+void BusT4Cover::load_learned_pos_max() {
+  LearnedPosMax data;
+  if (!pos_max_pref_.load(&data) || !data.valid || data.value <= pos_min_) return;
+
+  saved_pos_max_ = data.value;
+  pos_max_ = data.value;
+  pos_max_learned_ = true;
+  ESP_LOGI(TAG, "Loaded learned open position from flash: %d", pos_max_);
 }
 
 void BusT4Cover::accept_controller(T4Source addr, const char *via) {
@@ -1323,8 +1365,10 @@ void BusT4Cover::rediscover() {
   encoder_max_ = 0;
   pos_max_from_cu_ = false;
   pos_max_learned_ = false;
+  load_learned_pos_max();
   indexed_position_ = false;
   position_unsupported_ = false;
+  indexed_position_seen_ = false;
   discovery_attempts_ = 0;
   cu_answered_ = false;
   init_silence_warned_ = false;

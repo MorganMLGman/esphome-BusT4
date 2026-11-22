@@ -41,6 +41,12 @@ struct LearnedDurations {
   bool valid;  // Set to true after first successful learning
 };
 
+// Structure for persisting the open position learned from the encoder
+struct LearnedPosMax {
+  uint16_t value;
+  bool valid;
+};
+
 // Known product identifiers for device-specific handling
 // Products starting with WLA = Walky (uses 1-byte position)
 static const std::string PRODUCT_WALKY = "WLA";
@@ -183,6 +189,8 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   bool learning_close_{false};           // Currently learning close duration
   uint32_t learning_start_time_{0};      // When learning movement started
   ESPPreferenceObject pref_;             // Preference storage for learned values
+  ESPPreferenceObject pos_max_pref_;     // Preference storage for the learned open position
+  uint16_t saved_pos_max_{0};            // What pos_max_pref_ holds, 0 = nothing saved
 
   // Timing
   uint32_t last_position_update_{0};
@@ -196,6 +204,7 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   bool force_estimated_position_{false};  // Ignore encoder reports, always estimate from timing
   bool indexed_position_{false};     // Plain position read was refused, ask per motor instead
   bool position_unsupported_{false}; // Indexed read was refused too, stop polling
+  bool indexed_position_seen_{false};  // An indexed read has been answered at least once
   bool has_encoder_{false};          // True if device reports encoder positions
   uint32_t last_encoder_update_{0};  // Last time we got encoder data
 
@@ -211,6 +220,8 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
   void cancel_learning();
   void save_learned_durations();
   void load_learned_durations();
+  void save_learned_pos_max();
+  void load_learned_pos_max();
 
   // Request status confirmation after unexpected stop
   void request_status_confirmation();
