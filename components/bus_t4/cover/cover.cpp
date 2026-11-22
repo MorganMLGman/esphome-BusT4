@@ -674,9 +674,12 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
         case STA_PART_OPENED:
           current_operation = cover::COVER_OPERATION_IDLE;
           if (awaiting_confirmation_) {
-            // Gate stopped mid-movement - position is uncertain
-            // Keep the time-based estimate but log it
-            ESP_LOGW(TAG, "Gate stopped at unknown position (estimated %.0f%%)", this->position * 100);
+            if (has_encoder_) {
+              ESP_LOGI(TAG, "Gate stopped mid-travel");  // The position read requested alongside follows
+            } else {
+              // No encoder: keep the time-based estimate but log it
+              ESP_LOGW(TAG, "Gate stopped at unknown position (estimated %.0f%%)", this->position * 100);
+            }
           }
           break;
       }
@@ -1035,6 +1038,8 @@ void BusT4Cover::request_status_confirmation() {
   // Not INF_IO: its limit bits swap with the installation side, and the byte this used to
   // read holds the motor outputs (gashtaan's diagnostics page)
   send_info_request(FOR_CU, INF_STATUS);
+  // The leaves coast a little after a stop, so the encoder has moved past the value at the stop event
+  if (has_encoder_ && !is_robus_) request_position();
 }
 
 void BusT4Cover::update_position(uint16_t encoder_pos) {

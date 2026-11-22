@@ -14,7 +14,7 @@ ESPHome component for integrating **Nice gate and garage door automation** into 
 - 🔒 **Local control** - No cloud, no internet required
 - 🚪 **Full gate control** - Open, close, stop, and partial opening commands
 - 📊 **Real-time status** - Opening, closing, stopped, fully open/closed states
-- 📏 **Position tracking** - Time-based estimation with encoder priority when available
+- 📏 **Position tracking** - Encoder position when the controller provides it (per leaf on dual-leaf swing gates), time-based estimation otherwise
 - 🧠 **Auto-learning** - Automatically learns and re-learns your gate's open/close timing
 - ⚙️ **Motor configuration** - Control auto-close, standby, peak mode, and more via SET commands
 - 🔧 **Wide compatibility** - Device-specific handling for Walky, Robus, Road 400, and more
@@ -30,6 +30,7 @@ The [Nice BiDi-WiFi](https://www.niceforyou.com/uk/nicepost/bidi-wifi-new-pocket
 
 Tested with:
 - Nice Robus (RBS400, RBS600, RBS800, etc.)
+- Nice POA3R30 control unit with HOPP HO7124 + HO7224 gearmotors (dual-leaf swing gate, one encoder per leaf)
 
 Should work with:
 - Nice Walky (WLA1)
@@ -110,8 +111,9 @@ wifi:
 external_components:
   - source:
       type: git
-      url: https://github.com/makstech/esphome-BusT4
-      ref: v1
+      url: https://github.com/MorganMLGman/esphome-BusT4
+      ref: v2.1.0
+      refresh: never
     components: [bus_t4]
 
 uart:
@@ -138,17 +140,16 @@ esphome run gate.yaml
 
 ## Versioning
 
-`ref: v1` tracks the newest release that stays compatible with the `v1` configuration. ESPHome re-checks the source once a day, so compatible fixes arrive on your next rebuild without editing anything. Breaking changes go out as `v2` and never reach you until you change that line.
+Pin an exact release. ESPHome re-checks a git source once a day, so a moving ref could pull in changes you did not choose on your next rebuild. An exact tag with `refresh: never` stays frozen until you edit the line.
 
 | `ref` | You get |
 |-------|---------|
-| `v1` | Newest `v1.x.y` release. Recommended. |
-| `v1.2.3` | That exact release, frozen. Add `refresh: never` alongside it. |
-| omitted | Whatever is on `main`, including unreleased work. |
+| `v2.1.0` | That exact release, frozen. Add `refresh: never` alongside it. Recommended. |
+| omitted | Whatever is on `master`, including unreleased work. |
 
-Do not set `refresh: never` with `ref: v1` — that pins you to whichever release `v1` happened to point at when you first built, which is the one thing the moving tag exists to avoid.
+This fork does not publish a moving major tag such as `v2`.
 
-See [Releases](https://github.com/makstech/esphome-BusT4/releases) for what changed.
+See [Releases](https://github.com/MorganMLGman/esphome-BusT4/releases) for what changed.
 
 ## Configuration
 
@@ -158,8 +159,9 @@ See [Releases](https://github.com/makstech/esphome-BusT4/releases) for what chan
 external_components:
   - source:
       type: git
-      url: https://github.com/makstech/esphome-BusT4
-      ref: v1
+      url: https://github.com/MorganMLGman/esphome-BusT4
+      ref: v2.1.0
+      refresh: never
     components: [bus_t4]
 
 uart:
@@ -447,12 +449,22 @@ This component uses **multiple strategies** for accurate position tracking:
 
 ### 1. Encoder Position (Primary when available)
 
-For devices that support it, the component polls encoder position during movement every 500ms. This provides the most accurate position tracking.
+For controllers that report it, the component polls the encoder position during movement every `position_report_interval` (1s by default). This provides the most accurate position tracking.
 
 - Encoder data is prioritized when available (updated within last 2 seconds)
 - Automatically detected - no configuration needed
+- The encoder value becomes a percentage using the open position: taken from the controller when it reports one, otherwise learned the first time the gate reports fully open and stored in flash
+- The controller's fully open / fully closed status always wins at the ends. A leaf backs off the stop by a few counts once it has stopped, so the resting encoder reads slightly below the open position
 
 > **Note**: Robus devices don't support position queries during movement
+
+#### Dual-leaf swing gates (per-motor encoders)
+
+Some controllers (seen on the POA3R30) refuse the plain position read with status `0xF1`. The component then asks per motor, the way the Nice Oview programmer does, and reads both leaves:
+
+- Each leaf has its own encoder and its own range (for example 259 and 400 counts), read from the controller's register `04/12` at startup. Look for `Open position of motor 1` and `Motor 2 open position` in the logs
+- The leaves do not move in step: on opening one leads, on closing the other does. The gate's position is the mean of the two, each against its own range, so it moves smoothly from 0% to 100%
+- Without a range for the second motor, the first leaf alone drives the position
 
 ### 2. Time-Based Estimation (Fallback)
 
@@ -464,7 +476,7 @@ For devices that support it, the component polls encoder position during movemen
 
 ### 3. Status Confirmation
 
-When the gate stops, the component asks the controller for its status (INF_STATUS) to confirm whether it is fully open or closed, even if the time-based estimate is slightly off. The limit switches themselves are available as [I/O diagnostics](#io-diagnostics).
+When the gate stops, the component asks the controller for its status (INF_STATUS) to confirm whether it is fully open or closed, even if the time-based estimate is slightly off. With an encoder it also re-reads the position, because the leaves coast a little after a stop. The limit switches themselves are available as [I/O diagnostics](#io-diagnostics).
 
 ### 4. Periodic Status Refresh
 
@@ -498,6 +510,7 @@ Device information (manufacturer, product, firmware) is logged at startup.
 1. Wait for a complete open/close cycle for auto-learning
 2. Check logs for "Learned new open/close duration" messages
 3. Manually set `open_duration` and `close_duration` if auto-learning fails
+4. The startup log line `Position source:` says whether the encoder or the time-based estimate is in use. If the controller refuses position reads, `DMP error 0x.. for cmd=0x11` at `DEBUG` shows why
 
 ### Seeing raw bus traffic
 
