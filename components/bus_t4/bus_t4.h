@@ -36,6 +36,9 @@ class BusT4Device {
   // Send a DMP info request (get status, position, etc)
   void send_info_request(T4Target target, T4InfoCommand command);
 
+  // Same, with a one-byte argument, as Oview sends it to read one motor's encoder
+  void send_indexed_info_request(T4Target target, T4InfoCommand command, uint8_t index);
+
   // Send a DMP config set command
   // Accepts uint8_t to allow raw parameter values beyond the T4InfoCommand enum
   void send_config_set(uint8_t param, uint8_t value);

@@ -194,6 +194,8 @@ class BusT4Cover : public cover::Cover, public BusT4Device, public Component {
 
   // Position source tracking
   bool force_estimated_position_{false};  // Ignore encoder reports, always estimate from timing
+  bool indexed_position_{false};     // Plain position read was refused, ask per motor instead
+  bool position_unsupported_{false}; // Indexed read was refused too, stop polling
   bool has_encoder_{false};          // True if device reports encoder positions
   uint32_t last_encoder_update_{0};  // Last time we got encoder data
 

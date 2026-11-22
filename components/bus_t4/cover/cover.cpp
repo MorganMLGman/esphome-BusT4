@@ -520,6 +520,17 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
 
   // Check for errors
   if (status != ERR_NONE) {
+    // The POA3R30 refuses the plain position read; Oview asks per motor instead
+    if (command == INF_CUR_POS && status == ERR_GET_REFUSED) {
+      if (!indexed_position_) {
+        ESP_LOGI(TAG, "Plain position read refused (0x%02X), retrying with a motor index", status);
+        indexed_position_ = true;
+        request_position();
+      } else if (!position_unsupported_) {
+        ESP_LOGI(TAG, "Indexed position read refused too, keeping the time-based position");
+        position_unsupported_ = true;
+      }
+    }
     // Loud while identifying the controller, quiet afterwards - a rejected poll repeats forever
     if (init_ok_) {
       ESP_LOGD(TAG, "DMP error 0x%02X for cmd=0x%02X", status, command);
@@ -650,6 +661,10 @@ void BusT4Cover::parse_dmp_packet(const T4Packet &packet) {
 
     case INF_CUR_POS: {
       uint16_t pos;
+      if (indexed_position_) {
+        ESP_LOGD(TAG, "Indexed position reply: %s",
+                 format_hex_pretty(packet.data + DATA_OFFSET, payload_len).c_str());
+      }
       if (!read_position_value(packet, &pos)) break;
       ESP_LOGV(TAG, "Current position: %d", pos);
       update_position(pos);
@@ -955,8 +970,12 @@ void BusT4Cover::init_oxi_device() {
 }
 
 void BusT4Cover::request_position() {
-  if (parent_ == nullptr || force_estimated_position_) return;
-  send_info_request(FOR_CU, INF_CUR_POS);
+  if (parent_ == nullptr || force_estimated_position_ || position_unsupported_) return;
+  if (indexed_position_) {
+    send_indexed_info_request(FOR_CU, INF_CUR_POS, 0x00);  // motor 1
+  } else {
+    send_info_request(FOR_CU, INF_CUR_POS);
+  }
 }
 
 void BusT4Cover::request_status() {
@@ -1304,6 +1323,8 @@ void BusT4Cover::rediscover() {
   encoder_max_ = 0;
   pos_max_from_cu_ = false;
   pos_max_learned_ = false;
+  indexed_position_ = false;
+  position_unsupported_ = false;
   discovery_attempts_ = 0;
   cu_answered_ = false;
   init_silence_warned_ = false;

@@ -117,6 +117,7 @@ enum T4ResponseType : uint8_t {
 // Error codes (byte 13)
 enum T4Error : uint8_t {
   ERR_NONE = 0x00,       // No error
+  ERR_GET_REFUSED = 0xF1, // GET not allowed (POA3R30 answers this to a plain position read)
   ERR_UNSUPPORTED = 0xFD, // Command not supported
 };
 
