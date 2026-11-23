@@ -18,7 +18,7 @@ namespace esphome::bus_t4 {
 static const char *TAG = "bus_t4";
 
 // Bumped when tagging a release; checked against the tag by CI
-static const char *VERSION = "2.2.0";
+static const char *VERSION = "2.2.1";
 
 // Break signal baud rate: sending 0x00 at 9200 baud produces a ~1ms low pulse
 // on a 19200 baud bus. Reference: pruwait/Nice_BusT4 nice-bust4.h
@@ -114,7 +114,7 @@ void BusT4Component::note_rx_error(const uint8_t *data, size_t len, const char *
   const uint32_t number = ++rx_errors_;
   if (last_error_sensor_ == nullptr) return;
 
-  char what[48];
+  char what[96];
   va_list args;
   va_start(args, fmt);
   vsnprintf(what, sizeof(what), fmt, args);
@@ -125,7 +125,8 @@ void BusT4Component::note_rx_error(const uint8_t *data, size_t len, const char *
 
   // The number keeps two identical frames distinct for Home Assistant's history
   LockGuard guard(last_error_lock_);
-  snprintf(last_error_, sizeof(last_error_), "#%u %s: %s", static_cast<unsigned>(number), what, hex);
+  // Home Assistant refuses states over 255 characters, so the frame is cut to its first 40 bytes
+  snprintf(last_error_, sizeof(last_error_), "#%u %s: %.119s", static_cast<unsigned>(number), what, hex);
   last_error_pending_ = true;
 }
 
@@ -145,17 +146,42 @@ void BusT4Component::busTask() {
   uint32_t last_rx_ms = 0;
   TickType_t last_tx_time = 0;
 
+  // Timing of the frame being received, reported with its errors so a collision with our own
+  // transmission can be told apart from a stalled task or a sender that paused mid-frame
+  uint32_t last_tx_end_ms = 0;
+  uint32_t frame_start_ms = 0;
+  uint32_t max_gap_ms = 0;   // longest silence between two bytes of the frame
+  uint32_t max_lag_ms = 0;   // longest pass of this task while the frame was open
+  uint32_t last_pass_ms = millis();
+  auto describe_timing = [&](char *out, size_t size) {
+    snprintf(out, size, "tx+%ums dur %ums gap %ums lag %ums",
+             static_cast<unsigned>(frame_start_ms - last_tx_end_ms),
+             static_cast<unsigned>(last_rx_ms - frame_start_ms), static_cast<unsigned>(max_gap_ms),
+             static_cast<unsigned>(max_lag_ms));
+  };
+  char timing[48];
+
   for (;;) {
     uint8_t byte;
     uint8_t drained = 0;
+    const uint32_t pass_ms = millis();
+    if (rx_state != WAIT_SYNC)
+      max_lag_ms = std::max(max_lag_ms, pass_ms - last_pass_ms);
+    last_pass_ms = pass_ms;
     while (drained < RX_DRAIN_LIMIT && parent_->available() && parent_->read_byte(&byte) == true) {
       drained++;
-      last_rx_ms = millis();
+      const uint32_t now = millis();
+      if (rx_state != WAIT_SYNC)
+        max_gap_ms = std::max(max_gap_ms, now - last_rx_ms);
+      last_rx_ms = now;
       switch (rx_state) {
         case WAIT_SYNC:
           // Wait for SYNC byte (0x55), ignore break bytes (0x00) and others
           if (byte == T4_SYNC) {
             rx_state = SIZE;
+            frame_start_ms = now;
+            max_gap_ms = 0;
+            max_lag_ms = 0;
           }
           break;
 
@@ -185,8 +211,9 @@ void BusT4Component::busTask() {
               ESP_LOGW(TAG, "Header checksum mismatch: expected 0x%02X, got 0x%02X: %s",
                        header_check, packet.data[6],
                        format_hex_pretty(packet.data, packet.size).c_str());
-              note_rx_error(packet.data, packet.size, "header checksum, expected 0x%02X got 0x%02X",
-                            header_check, packet.data[6]);
+              describe_timing(timing, sizeof(timing));
+              note_rx_error(packet.data, packet.size, "header checksum, expected 0x%02X got 0x%02X (%s)",
+                            header_check, packet.data[6], timing);
               rx_state = WAIT_SYNC;
               break;
             }
@@ -201,8 +228,9 @@ void BusT4Component::busTask() {
                 ESP_LOGW(TAG, "Payload checksum mismatch: expected 0x%02X, got 0x%02X: %s",
                          payload_check, packet.data[packet.size - 1],
                          format_hex_pretty(packet.data, packet.size).c_str());
-                note_rx_error(packet.data, packet.size, "payload checksum, expected 0x%02X got 0x%02X",
-                              payload_check, packet.data[packet.size - 1]);
+                describe_timing(timing, sizeof(timing));
+                note_rx_error(packet.data, packet.size, "payload checksum, expected 0x%02X got 0x%02X (%s)",
+                              payload_check, packet.data[packet.size - 1], timing);
                 rx_state = WAIT_SYNC;
                 break;
               }
@@ -217,7 +245,9 @@ void BusT4Component::busTask() {
             }
           } else {
             ESP_LOGW(TAG, "Trailing size mismatch: expected 0x%02X, got 0x%02X", expected_size, byte);
-            note_rx_error(packet.data, packet.size, "trailing size, expected 0x%02X got 0x%02X", expected_size, byte);
+            describe_timing(timing, sizeof(timing));
+            note_rx_error(packet.data, packet.size, "trailing size, expected 0x%02X got 0x%02X (%s)", expected_size,
+                          byte, timing);
           }
           rx_state = WAIT_SYNC;
           break;
@@ -229,8 +259,9 @@ void BusT4Component::busTask() {
     if (rx_state != WAIT_SYNC && millis() - last_rx_ms >= FRAME_STALL_MS) {
       ESP_LOGW(TAG, "Frame stalled after %u of %u bytes, resyncing",
                static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size));
-      note_rx_error(packet.data, packet.size, "stalled after %u of %u bytes",
-                    static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size));
+      describe_timing(timing, sizeof(timing));
+      note_rx_error(packet.data, packet.size, "stalled after %u of %u bytes (%s)",
+                    static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size), timing);
       rx_state = WAIT_SYNC;
     }
 
@@ -254,6 +285,7 @@ void BusT4Component::busTask() {
         parent_->flush();
 
         last_tx_time = xTaskGetTickCount();
+        last_tx_end_ms = millis();
       }
     }
 
