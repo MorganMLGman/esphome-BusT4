@@ -112,7 +112,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/MorganMLGman/esphome-BusT4
-      ref: v2.2.1
+      ref: v2.2.2
       refresh: never
     components: [bus_t4]
 
@@ -144,7 +144,7 @@ Pin an exact release. ESPHome re-checks a git source once a day, so a moving ref
 
 | `ref` | You get |
 |-------|---------|
-| `v2.2.1` | That exact release, frozen. Add `refresh: never` alongside it. Recommended. |
+| `v2.2.2` | That exact release, frozen. Add `refresh: never` alongside it. Recommended. |
 | omitted | Whatever is on `master`, including unreleased work. |
 
 This fork does not publish a moving major tag such as `v2`.
@@ -160,7 +160,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/MorganMLGman/esphome-BusT4
-      ref: v2.2.1
+      ref: v2.2.2
       refresh: never
     components: [bus_t4]
 
@@ -204,7 +204,7 @@ button:
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `address` | hex | `0x5090` | Device address on the bus |
-| `bus_errors` | sensor | - | Diagnostic count of bad frames since boot (checksum, length, cut off mid-frame, RX queue full). A steady rise points at wiring or interference. |
+| `bus_errors` | sensor | - | Diagnostic count of bad frames since boot (checksum, length, cut off mid-frame, RX queue full). A steady rise points at wiring or interference. A control unit that aborts a reply and sends it again counts once: the repeat is recovered, not lost. |
 | `last_bus_error` | text_sensor | - | Diagnostic text sensor with the newest bad frame: the running error number, what failed and the frame bytes, e.g. `#3 header checksum, expected 0x4C got 0x4D (tx+14ms dur 12ms gap 1ms lag 2ms): 50.90.00.03...`. The bracket times the broken frame: `tx+` is the delay after our last transmission to its first byte, `dur` its length, `gap` the longest silence inside it and `lag` the longest stall of the bus task meanwhile. A large `lag` points at the ESP, a large `gap` with a small `lag` at the sender, `tx+` near 0 at a collision with our own transmission. Reads `none` until the first error. Pairs with `bus_errors`. |
 
 #### Cover Platform

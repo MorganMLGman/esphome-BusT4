@@ -6,6 +6,7 @@
 #include "esphome/core/helpers.h"
 
 #include "t4_packet.h"
+#include "t4_rx_parser.h"
 
 #include <esp_rom_sys.h>
 
@@ -18,7 +19,7 @@ namespace esphome::bus_t4 {
 static const char *TAG = "bus_t4";
 
 // Bumped when tagging a release; checked against the tag by CI
-static const char *VERSION = "2.2.1";
+static const char *VERSION = "2.2.2";
 
 // Break signal baud rate: sending 0x00 at 9200 baud produces a ~1ms low pulse
 // on a 19200 baud bus. Reference: pruwait/Nice_BusT4 nice-bust4.h
@@ -137,12 +138,7 @@ void BusT4Component::dump_config() {
 }
 
 void BusT4Component::busTask() {
-  T4Packet packet;
-  uint8_t expected_size = 0;
-  // Protocol format: [BREAK] SYNC SIZE DATA[N] SIZE
-  // The size byte is sent twice (start and end), no separate checksum byte.
-  // Internal checksums are within the DATA portion.
-  enum { WAIT_SYNC = 0, SIZE, DATA, TRAILING_SIZE } rx_state = WAIT_SYNC;
+  T4RxParser parser;
   uint32_t last_rx_ms = 0;
   TickType_t last_tx_time = 0;
 
@@ -161,112 +157,91 @@ void BusT4Component::busTask() {
   };
   char timing[48];
 
+  auto handle = [&](T4RxParser::Event event) {
+    using Event = T4RxParser::Event;
+    const T4Packet &packet = parser.packet();
+    switch (event) {
+      case Event::NONE:
+        return;
+      case Event::PACKET:
+        ESP_LOGV(TAG, "Received packet: %s (%d bytes)", format_hex_pretty(packet.data, packet.size).c_str(),
+                 packet.size);
+        if (!xQueueSend(rxQueue_, &packet, pdMS_TO_TICKS(100))) {
+          ESP_LOGW(TAG, "RX queue full, dropping packet");
+          note_rx_error(packet.data, packet.size, "RX queue full");
+        }
+        return;
+      case Event::HEADER_CHECKSUM:
+        ESP_LOGW(TAG, "Header checksum mismatch: expected 0x%02X, got 0x%02X: %s", parser.expected(), parser.got(),
+                 format_hex_pretty(packet.data, packet.size).c_str());
+        describe_timing(timing, sizeof(timing));
+        note_rx_error(packet.data, packet.size, "header checksum, expected 0x%02X got 0x%02X (%s)",
+                      parser.expected(), parser.got(), timing);
+        return;
+      case Event::PAYLOAD_CHECKSUM:
+        ESP_LOGW(TAG, "Payload checksum mismatch: expected 0x%02X, got 0x%02X: %s", parser.expected(), parser.got(),
+                 format_hex_pretty(packet.data, packet.size).c_str());
+        describe_timing(timing, sizeof(timing));
+        note_rx_error(packet.data, packet.size, "payload checksum, expected 0x%02X got 0x%02X (%s)",
+                      parser.expected(), parser.got(), timing);
+        return;
+      case Event::TRAILING_SIZE:
+        ESP_LOGW(TAG, "Trailing size mismatch: expected 0x%02X, got 0x%02X", parser.expected(), parser.got());
+        describe_timing(timing, sizeof(timing));
+        note_rx_error(packet.data, packet.size, "trailing size, expected 0x%02X got 0x%02X (%s)", parser.expected(),
+                      parser.got(), timing);
+        return;
+    }
+  };
+
   for (;;) {
     uint8_t byte;
     uint8_t drained = 0;
     const uint32_t pass_ms = millis();
-    if (rx_state != WAIT_SYNC)
+    if (!parser.idle())
       max_lag_ms = std::max(max_lag_ms, pass_ms - last_pass_ms);
     last_pass_ms = pass_ms;
     while (drained < RX_DRAIN_LIMIT && parent_->available() && parent_->read_byte(&byte) == true) {
       drained++;
       const uint32_t now = millis();
-      if (rx_state != WAIT_SYNC)
+      const bool was_idle = parser.idle();
+      if (!was_idle)
         max_gap_ms = std::max(max_gap_ms, now - last_rx_ms);
       last_rx_ms = now;
-      switch (rx_state) {
-        case WAIT_SYNC:
-          // Wait for SYNC byte (0x55), ignore break bytes (0x00) and others
-          if (byte == T4_SYNC) {
-            rx_state = SIZE;
-            frame_start_ms = now;
-            max_gap_ms = 0;
-            max_lag_ms = 0;
-          }
-          break;
+      handle(parser.feed(byte));
+      if (was_idle && !parser.idle()) {
+        frame_start_ms = now;
+        max_gap_ms = 0;
+        max_lag_ms = 0;
+      }
 
-        case SIZE:
-          if (byte > 0 && byte <= 60) {
-            expected_size = byte;
-            packet.size = 0;
-            rx_state = DATA;
-          } else {
-            // Invalid size, go back to waiting for sync
-            rx_state = WAIT_SYNC;
-          }
-          break;
-
-        case DATA:
-          packet.data[packet.size++] = byte;
-          if (packet.size == expected_size)
-            rx_state = TRAILING_SIZE;
-          break;
-
-        case TRAILING_SIZE:
-          // Verify trailing size matches
-          if (byte == expected_size) {
-            // Verify header checksum (CRC1): XOR of bytes 0-5 should equal byte 6
-            uint8_t header_check = packet.checksum(0, 6);
-            if (header_check != packet.data[6]) {
-              ESP_LOGW(TAG, "Header checksum mismatch: expected 0x%02X, got 0x%02X: %s",
-                       header_check, packet.data[6],
-                       format_hex_pretty(packet.data, packet.size).c_str());
-              describe_timing(timing, sizeof(timing));
-              note_rx_error(packet.data, packet.size, "header checksum, expected 0x%02X got 0x%02X (%s)",
-                            header_check, packet.data[6], timing);
-              rx_state = WAIT_SYNC;
-              break;
-            }
-
-            // Verify payload checksum (CRC2): XOR of bytes 7 to size-2 should equal byte size-1
-            if (packet.size >= 9) {  // Minimum: 7 header + 1 payload + 1 CRC2
-              uint8_t payload_check = packet.data[7];
-              for (size_t i = 8; i < packet.size - 1; i++) {
-                payload_check ^= packet.data[i];
-              }
-              if (payload_check != packet.data[packet.size - 1]) {
-                ESP_LOGW(TAG, "Payload checksum mismatch: expected 0x%02X, got 0x%02X: %s",
-                         payload_check, packet.data[packet.size - 1],
-                         format_hex_pretty(packet.data, packet.size).c_str());
-                describe_timing(timing, sizeof(timing));
-                note_rx_error(packet.data, packet.size, "payload checksum, expected 0x%02X got 0x%02X (%s)",
-                              payload_check, packet.data[packet.size - 1], timing);
-                rx_state = WAIT_SYNC;
-                break;
-              }
-            }
-
-            // Both checksums valid - accept packet
-            ESP_LOGV(TAG, "Received packet: %s (%d bytes)",
-                     format_hex_pretty(packet.data, packet.size).c_str(), packet.size);
-            if (!xQueueSend(rxQueue_, &packet, pdMS_TO_TICKS(100))) {
-              ESP_LOGW(TAG, "RX queue full, dropping packet");
-              note_rx_error(packet.data, packet.size, "RX queue full");
-            }
-          } else {
-            ESP_LOGW(TAG, "Trailing size mismatch: expected 0x%02X, got 0x%02X", expected_size, byte);
-            describe_timing(timing, sizeof(timing));
-            note_rx_error(packet.data, packet.size, "trailing size, expected 0x%02X got 0x%02X (%s)", expected_size,
-                          byte, timing);
-          }
-          rx_state = WAIT_SYNC;
-          break;
+      // The sender may have restarted a frame it aborted, and the restart is in the bytes just read
+      if (parser.has_pending()) {
+        ESP_LOGD(TAG, "Replaying %u bytes of the broken frame to catch a restarted one",
+                 static_cast<unsigned>(parser.pending_count()));
+        while (parser.has_pending())
+          handle(parser.step_pending());
+        if (!parser.idle()) {
+          frame_start_ms = now;
+          max_gap_ms = 0;
+          max_lag_ms = 0;
+        }
       }
     }
 
-    // A truncated frame would otherwise hold rx_state forever and, with it, every transmit -
+    // A truncated frame would otherwise hold the parser forever and, with it, every transmit -
     // including the polls the controller needs before it says anything again
-    if (rx_state != WAIT_SYNC && millis() - last_rx_ms >= FRAME_STALL_MS) {
+    if (!parser.idle() && millis() - last_rx_ms >= FRAME_STALL_MS) {
       ESP_LOGW(TAG, "Frame stalled after %u of %u bytes, resyncing",
-               static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size));
+               static_cast<unsigned>(parser.received()), static_cast<unsigned>(parser.expected_size()));
       describe_timing(timing, sizeof(timing));
-      note_rx_error(packet.data, packet.size, "stalled after %u of %u bytes (%s)",
-                    static_cast<unsigned>(packet.size), static_cast<unsigned>(expected_size), timing);
-      rx_state = WAIT_SYNC;
+      note_rx_error(parser.packet().data, parser.received(), "stalled after %u of %u bytes (%s)",
+                    static_cast<unsigned>(parser.received()), static_cast<unsigned>(parser.expected_size()), timing);
+      parser.reset();
     }
 
     // Transmit only between frames, and only once the bus has gone quiet
-    if (rx_state == WAIT_SYNC && millis() - last_rx_ms >= BUS_IDLE_MS) {
+    if (parser.idle() && millis() - last_rx_ms >= BUS_IDLE_MS) {
       T4Frame frame;
       if (xQueueReceive(txQueue_, &frame, 0)) {
         TickType_t elapsed = xTaskGetTickCount() - last_tx_time;
